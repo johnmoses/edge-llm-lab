@@ -1,0 +1,19 @@
+# Python environment
+.venv/
+__pycache__/
+*.pyc
+
+# llama.cpp is cloned/built locally, not vendored into this repo
+llama.cpp/
+
+# Model artifacts (large) — publish GGUFs to HuggingFace, not git
+models/
+*.gguf
+*.safetensors
+*.bin
+
+# Build/run logs (keep BUILD_LOG.md; ignore raw dumps)
+build_output.log
+pip_install.log
+rebuild*.log
+*.log
