@@ -1,0 +1,12 @@
+{
+  "model": "models/qwen0.5b-extract-fp16.gguf",
+  "n_examples": 100,
+  "valid_json_rate": 1.0,
+  "field_accuracy": 0.8972,
+  "exact_match": 0.46,
+  "field_precision": 0.8958,
+  "field_recall": 0.8972,
+  "field_f1": 0.8965,
+  "rougeL": 0.9755,
+  "_note": "rougeL is legacy/cross-domain comparability only; field_accuracy is the primary metric for structured extraction."
+}

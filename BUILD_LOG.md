@@ -144,7 +144,99 @@ Tool: `llama-bench` (built from source). M1 Pro, 8 threads, pp128 (prompt) + tg6
 **⚠️ Quality note (honest):** GPT-2 base is a weak 2019 model — output is not
 coherent regardless of quantization. This model verifies the PIPELINE
 (convert→quantize→profile), NOT output quality. Quality comparison across levels is
-deferred to the fine-tuned Gemma artifact (Tier 2).
+covered by the fine-tuned model below (Tier 2).
 
-## Step 5 — Publish GGUF + model card
-(pending)
+---
+
+# TIER 2 — Fine-tuned OWN model (Qwen2.5-0.5B) ✅
+
+The GPT-2 work above proved the *pipeline*. Tier 2 runs a model **I fine-tuned
+myself** through that same pipeline — the real "my own model → edge runtime" arc.
+
+> Note: dropped from the originally-planned Gemma-2-2B to Qwen2.5-0.5B because
+> **macOS 13.7 blocks torch 2.11's MPS backend** (needs macOS 14+), so training is
+> CPU-only. A 0.5B model is CPU-trainable in ~40 min AND more edge-appropriate.
+
+## T2.1 — Fine-tune (LoRA, CPU)
+- Base: `Qwen/Qwen2.5-0.5B` (decoder-only). Task: transcript → 12-field JSON
+  extraction (synthetic data only, reframed from a seq2seq task to decoder-only
+  instruction format with completion-only loss masking).
+- LoRA: r=8, alpha=16, target q/k/v/o proj → **1.08M trainable params (0.22%)**.
+- Run: 2000 rows, 1 epoch, batch 4 × grad-accum 4, CPU. **~42 min** on M1 Pro.
+- **Loss: 2.41 → 1.10 → 0.75 → 0.67 → 0.55** (clean monotonic decline).
+- Merged LoRA → standalone HF checkpoint (`finetune_qwen.py`).
+
+## T2.2 — Convert + Quantize
+Converted merged model → GGUF (948M, 290 tensors; no converter bug — Qwen is
+well-supported). Quantized:
+
+| Level | Size | Gen t/s (tg32) | Prompt t/s (pp64) |
+|---|---|---|---|
+| FP16 | 942 MiB | 90.1 | 323.5 |
+| Q8_0 | 501 MiB | 156.5 | 1709 |
+| Q5_K_M | 395 MiB | 175.4 | 372.7 |
+| Q4_K_M | 374 MiB | 183.2 | 506.4 |
+
+**Q4_K_M vs FP16: 2.5× smaller (948M→374M) AND ~2× faster generation (90→183 t/s).**
+
+## T2.3 — Output verification (does it actually work?)
+Generation tests on held-out-style transcripts:
+- **FP16:** `"Grace 08029876543 Kubwa salvation invited by Pastor Musa"` →
+  valid JSON, correct name/phone/invited_by, **inferred sex=Female from name** ✅
+  (one field misplacement: Kubwa → worship_place instead of address).
+- **Q4_K_M** (smallest): `"...Daniel. Phone 08111222333. From Nyanya. healing"` →
+  valid JSON, correct name/sex/phone/**address=Nyanya** ✅ (one hallucinated
+  `invited_by`). Quantization preserved the extraction ability.
+
+**Honest quality note:** a 0.5B / 1-epoch / CPU model — it reliably emits valid
+12-field JSON and nails easy fields (name, phone, address, inferred sex), but has
+occasional field misplacement / hallucination on sparse fields, and doesn't emit a
+clean stop (trails into noise after the JSON; cap generation in use). This is a
+PROOF of the fine-tune→quantize→edge-deploy arc, NOT a quality benchmark. The
+purpose-built T5 (ROUGE-L 0.98) remains the quality reference.
+
+## T2.3b — Evaluation on held-out test set (real metrics) ✅
+
+Tool: `evaluate.py` on the crusade **test** split (497 rows, unseen in training;
+100-row random sample per model). Metrics are task-appropriate for structured
+extraction; ROUGE-L included for cross-domain comparability with the T5 models.
+
+| Metric | FP16 | Q4_K_M | Δ (quant impact) |
+|---|---|---|---|
+| valid_json_rate | 1.00 | 0.96 | −0.04 |
+| **field_accuracy** | **0.897** | **0.871** | **−0.026** |
+| exact_match | 0.46 | 0.41 | −0.05 |
+| field_precision | 0.896 | 0.918 | +0.022 |
+| field_recall | 0.897 | 0.871 | −0.026 |
+| field_f1 | 0.897 | 0.894 | −0.003 |
+| rougeL (legacy) | 0.976 | 0.944 | −0.032 |
+
+**Headline (the edge tradeoff, now MEASURED not asserted):**
+- Q4_K_M is **2.5× smaller + ~2× faster generation** (from profiling) while losing
+  only **~2.6% field accuracy** and **0.3% F1**. This is the "run leaner on edge at
+  acceptable quality cost" tradeoff, quantified end-to-end.
+- Nuance: Q4 precision *rose* (0.918) while recall fell — quantization made the
+  model slightly more conservative (fills fewer fields, more accurate when it does).
+
+**Honest context:** ~0.87–0.90 field accuracy for a 0.5B / 1-epoch / CPU proof
+model is respectable and, correctly, BELOW the purpose-built T5 crusade model
+(field_acc 0.90, ROUGE-L 0.981). This is a pipeline/edge PROOF, not a SOTA attempt.
+
+### Eval tooling — debugging journey (real engineering evidence)
+Building `evaluate.py` surfaced and fixed three real issues:
+1. **Subprocess capture returned empty** — `llama-cli` interactive mode (`-st`)
+   writes to the TTY, not to captured stdout/stderr pipes. Fix: switch to
+   `llama-simple` (minimal one-shot generator, pipe-friendly).
+2. **JSON extraction from noisy output** — the 0.5B appends garbage (incl. stray
+   braces) after the JSON. Fix: `json.JSONDecoder().raw_decode()` scanning from
+   each `{`, tolerating trailing data, keeping the object with the expected schema.
+3. **UTF-8 decode crash** — noisy tail emitted invalid UTF-8 bytes; `subprocess`
+   with `text=True` threw `UnicodeDecodeError` mid-run. Fix: `errors="replace"`.
+
+## T2.4 — Publish GGUF + model card
+(pending — HuggingFace upload)
+
+**✅ ARC COMPLETE:** built engine from source → fine-tuned my own model →
+GGUF → quantized Q4/Q5/Q8 → profiled → verified valid output on the llama.cpp
+runtime. Unlocks the claim: *"fine-tuned my own small model on a structured-
+extraction task, quantized it, and ran it on the llama.cpp edge runtime."*
