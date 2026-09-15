@@ -98,21 +98,49 @@ fine-tuned Qwen model above is for.
 ## Reproduce
 
 ```bash
-# 1. build llama.cpp from source (Metal auto-enabled on Apple Silicon)
+# 0. clone this repo
+git clone https://github.com/johnmoses/edge-llm-lab.git
+cd edge-llm-lab
+
+# 1. Python env — pick ONE:
+
+#   (a) reusable conda env (recommended: install heavy deps once, reuse across projects;
+#       miniforge = arm64-native on Apple Silicon)
+conda create -y -n edge-ai python=3.10
+conda activate edge-ai
+pip install -r requirements.txt
+
+#   (b) portable venv (no conda needed; self-contained per project)
+python3 -m venv .venv
+source .venv/bin/activate          # Windows: .venv\Scripts\activate
+pip install -r requirements.txt
+
+# 2. build llama.cpp from source (Metal auto-enabled on Apple Silicon)
 git clone https://github.com/ggml-org/llama.cpp.git
 cmake -S llama.cpp -B llama.cpp/build
 cmake --build llama.cpp/build --config Release -j
 
-# 2. python env for conversion
-python3 -m venv .venv && ./.venv/bin/pip install \
-  -r llama.cpp/requirements/requirements-convert_hf_to_gguf.txt
+# 3. fine-tune a small model (LoRA, CPU) — optional; produces models/<name>/merged
+python finetune_qwen.py --data data/crusade_synthetic.jsonl \
+  --base Qwen/Qwen2.5-0.5B --out models/qwen0.5b-extract --epochs 1 --max-rows 2000
 
-# 3. convert → quantize → profile
-./.venv/bin/python llama.cpp/convert_hf_to_gguf.py <hf-model-dir> \
+# 4. convert → quantize → profile
+python llama.cpp/convert_hf_to_gguf.py models/qwen0.5b-extract/merged \
   --outfile models/model-fp16.gguf --outtype f16
 llama.cpp/build/bin/llama-quantize models/model-fp16.gguf models/model-Q4_K_M.gguf Q4_K_M
 llama.cpp/build/bin/llama-bench -m models/model-Q4_K_M.gguf -p 128 -n 64 -r 3
+
+# 5. evaluate on held-out test set
+python evaluate.py --model models/model-Q4_K_M.gguf --data data/crusade_test.jsonl --n 100
+
+# 6. publish quantized GGUFs + model card to HuggingFace
+python upload_to_hf.py --repo <your-username>/<repo-name>
 ```
+
+> Every subsequent session, re-activate the env first: `conda activate edge-ai`
+> (option a) or `source .venv/bin/activate` (option b). Then the commands above use
+> plain `python` / `llama-*`. The conda env is reusable across projects (install the
+> heavy deps once); the venv is self-contained if you don't use conda.
 
 ## Roadmap
 
@@ -128,6 +156,15 @@ llama.cpp/build/bin/llama-bench -m models/model-Q4_K_M.gguf -p 128 -n 64 -r 3
 ## Environment
 
 Apple M1 Pro · 32 GB · macOS 13.7 · AppleClang 14 · CMake 4.2 · Python 3.10
+
+Python deps are pinned in [`requirements.txt`](./requirements.txt). Two setup
+options (see [Reproduce](#reproduce)):
+- **conda env** (`edge-ai`, arm64-native via miniforge) — recommended for reuse:
+  the heavy deps (torch, transformers, peft, datasets) install once and are shared
+  across ML projects.
+- **portable venv** — no conda required, fully self-contained per project.
+
+Both install from the same `requirements.txt`, so results are reproducible either way.
 
 ## License
 

@@ -5,6 +5,13 @@ __pycache__/
 
 # llama.cpp is cloned/built locally, not vendored into this repo
 llama.cpp/
+llama.cpp-master/
+
+# scratch venvs
+.venv-master/
+
+# PR prep notes (local reference; the actual PR is written by hand on GitHub)
+PR_DRAFT_*.md
 
 # Model artifacts (large) — publish GGUFs to HuggingFace, not git
 models/
